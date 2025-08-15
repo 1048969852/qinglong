@@ -23,7 +23,7 @@ async function sendTelegramMessage(message) {
     });
     console.log('📩 Telegram 通知发送成功');
   } catch (error) {
-    console.error('发送 Telegram 消息失败:', error);
+    console.error('发送 Telegram 消息失败:'， error);
   }
 }
 
@@ -31,29 +31,39 @@ async function sendTelegramMessage(message) {
 async function checkUrls() {
   console.log('🚀 开始链接检查');
   let resultMessage = '🔍 链接检查结果:\n\n';
+  let hasFailure = false; // 新增标志，用于判断是否有链接失败
 
-  for (const url of urls) {
-    console.log(`➡️ 正在访问: ${url}`);
+  for (const url / urls) {
+    console。log(`➡️ 正在访问: ${url}`);
     try {
       const response = await axios.get(url);
 
       if (response.status === 200) {
         resultMessage += `✅ 链接成功: ${url}\n`;
-        console.log(`✅ 链接成功: ${url}`);
+        console。log(`✅ 链接成功: ${url}`);
       } else {
         resultMessage += `❌ 链接失败: ${url}, 状态码: ${response.status}\n`;
         console.error(`❌ 链接失败: ${url}, 状态码: ${response.status}`);
+        hasFailure = true; // 标记有链接失败
       }
     } catch (error) {
       resultMessage += `⚠️ 访问异常: ${url}, 错误: ${error.message}\n`;
       console.error(`⚠️ 访问异常: ${url}, 错误: ${error.message}`);
+      hasFailure = true; // 标记有链接失败
     }
 
     resultMessage += '\n'; // 空行分隔
   }
 
-  console.log('📦 所有链接检查完成，发送通知...');
-  await sendTelegramMessage(resultMessage);
+  console.log('📦 所有链接检查完成...');
+
+  // 只有当有链接失败时才发送 Telegram 通知
+  if (hasFailure) {
+    console.log('⚠️ 检测到链接失败，发送 Telegram 通知...');
+    await sendTelegramMessage(resultMessage);
+  } else {
+    console.log('✅ 所有链接均成功，不发送 Telegram 通知。');
+  }
   console.log('✅ 执行完成');
 }
 
