@@ -1,6 +1,3 @@
-/*
- * @Description: 56IDC 账号密码 + 验证码自动登录脚本 (JavaScript/Playwright/Tesseract.js 终极版)
- */
 
 /**
  * 脚本说明:
@@ -13,7 +10,7 @@
  * - `TG_BOT_TOKEN`: 可选。用于发送通知的 Telegram Bot Token。
  * - `TG_USER_ID`: 可选。用于接收通知的 Telegram User ID。
  * 3. 新增功能:
- * - IP检测: 脚本运行时会先检查服务器的出口IP。如果IP归属地不是中国，脚本将自动停止运行。
+ * - IP检测: 脚本运行时会先检查服务器的出口IP。如果IP归属地不是中国或检测失败，脚本将自动停止运行。
  * - 随机延迟: 脚本启动时会随机延迟0-15分钟，账户间会延迟1-2分钟。
  * - OCR优化: 内置字符白名单和单行识别模式，提高验证码识别准确率。
  * - 服务抓取: 登录成功后会记录账户下的主机名列表，并包含在TG通知中。
@@ -85,9 +82,9 @@ async function checkIPLocation() {
             return false;
         }
     } catch (error) {
-        log(`⚠️ IP归属地检测失败: ${error.message}，将默认继续执行脚本。`, 'warn');
-        notificationSummary += `📍 **IP检测**: \`⚠️ 检测失败, ${error.message}\`\n`;
-        return true;
+        log(`❌ IP归属地检测失败: ${error.message}，脚本将停止运行。`, 'error');
+        notificationSummary += `📍 **IP检测**: \`❌ 检测失败, ${error.message}\`\n`;
+        return false; // **关键修改**: 检测失败时返回 false，停止脚本
     }
 }
 
@@ -229,14 +226,14 @@ async function main() {
                     log(`✅ 账号 ${username} 成功登录！`);
                     break; 
                 } else if (restartCycle < MAX_BROWSER_RESTARTS) {
-                    log(`⚠️ 账号 ${username} 在浏览器周期 ${restartCycle} 中未能成功登录，将重启浏览器并重试...`, 'warn');
+                    log(`⚠️ 账号 ${username} 在浏览器周期 ${restartCycle} 中未能成功登录，将重启浏览器并重试...`， 'warn');
                     await delay(5000);
                 }
             }
 
             if (result.success) {
                 notificationSummary += `\n✅ **账号**: \`${maskedUsername}\`\n   - **状态**: 登录成功`;
-                if (result.services.length > 0) {
+                if (result。services。length > 0) {
                     notificationSummary += '\n   - **主机列表**:\n' + result.services.map(s => `     - \`${s}\``).join('\n');
                 } else {
                     notificationSummary += '\n   - **主机列表**: `无`';
@@ -247,7 +244,7 @@ async function main() {
 
             if (i < accounts.length - 1) {
                 const interAccountDelay = Math.floor(Math.random() * (120000 - 60000 + 1)) + 60000;
-                log(`⏳ 当前账户处理完毕，将随机延迟 ${Math.round(interAccountDelay / 60000)} 分钟后处理下一个账户...`);
+                log(`⏳ 当前账户处理完毕，将随机延迟 ${Math。round(interAccountDelay / 60000)} 分钟后处理下一个账户...`);
                 await delay(interAccountDelay);
             }
         }
@@ -255,7 +252,7 @@ async function main() {
         log(`主程序发生严重错误: ${error.message}`, 'error');
         notificationSummary += `\n\n❌ **严重错误**: ${error.message}`;
     } finally {
-        await worker.terminate();
+        await worker。terminate();
         log('✅ OCR引擎已关闭。');
         log('✅ 所有账号处理完毕。');
         notificationSummary += '\n\n✅ 所有账号处理完毕。';
