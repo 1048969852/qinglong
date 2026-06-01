@@ -245,7 +245,6 @@ class BaiduPan {
                 2: "超级会员",
                 3: "至尊会员"
             };
-            // 核心修正：默认是普通用户，只有在匹配到vip_type时才更新
             let vipStatus = "普通用户";
             if (vipTypeMatch) {
                 vipStatus = vipTypeMap[vipTypeMatch[1]] || "未知";
@@ -274,7 +273,7 @@ class BaiduPan {
     }
 
     /**
-     * 主执行函数
+     * 主程序入口
      */
     async main() {
         console.log(`\n--- 百度网盘账号 ${this.index} 开始 ---`);
@@ -290,12 +289,19 @@ class BaiduPan {
         const questionResult = await this.doDailyQuestion();
         const userInfo = await this.getUserInfo();
 
-        const isSuccess = signinResult.success || questionResult.success;
+        // --- 判断是否发生真正的异常 ---
+        // 成功、今日已签到、已答题 等都算作没有异常
+        // 如果 message 中包含 "失败" 或 "未配置"，则认为是异常
+        const hasError = (signinResult.message && signinResult.message.includes("失败")) || 
+                         (questionResult.message && questionResult.message.includes("失败"));
+                         
         const message = this.buildNotificationMessage(userInfo, signinResult, questionResult);
 
         return {
-            success: isSuccess,
-            message
+            success: !hasError, // 这里 true 代表没有异常，false 代表有异常需要通知
+            message: message,
+            hasError: hasError,
+            account: userInfo.username
         };
     }
 
@@ -342,14 +348,23 @@ class BaiduPan {
     const cookies = baiduCookies.split('\n').filter(c => c.trim());
     console.log(`📝 共发现 ${cookies.length} 个账号`);
     const results = [];
+    
+    // 收集所有失败的消息
+    let allFailureMessages = "";
+    let totalFailures = 0;
 
     for (let i = 0; i < cookies.length; i++) {
         const pan = new BaiduPan(cookies[i], i + 1);
         const result = await pan.main();
         results.push(result);
 
-        const status = result.success ? "成功" : "失败";
-        await notifyUser(`${name} - 账号 ${i + 1} ${status}`, result.message);
+        // --- 只记录失败信息，不再逐个发送通知 ---
+        if (result.hasError || !result.success) {
+            totalFailures++;
+            allFailureMessages += `\n❌ 账号 ${i + 1} (${result.account || '未知'}):\n${result.message}\n`;
+        } else {
+             console.log(`✅ 账号 ${i + 1} (${result.account || '未知'}) 任务成功，无异常。`);
+        }
 
         if (i < cookies.length - 1) {
             const delay = Math.floor(Math.random() * 10) + 10;
@@ -358,12 +373,13 @@ class BaiduPan {
         }
     }
 
-    if (cookies.length > 1) {
-        const successCount = results.filter(r => r.success).length;
-        const totalCount = cookies.length;
-        let summaryMsg = `📊 百度网盘签到汇总\n\n`;
-        summaryMsg += `📈 总计: ${totalCount}个，成功: ${successCount}个，失败: ${totalCount - successCount}个\n`;
-        await notifyUser(`${name} - 汇总`, summaryMsg);
+    // --- 最终判定：只有遇到失败的账号才发送汇总通知 ---
+    if (totalFailures > 0) {
+        console.log(`\n⚠️ 检测到 ${totalFailures} 个账号任务失败，准备发送通知...`);
+        const title = `⚠️ 百度网盘签到异常 (${totalFailures}/${cookies.length})`;
+        await notifyUser(title, allFailureMessages);
+    } else {
+        console.log(`\n🎉 所有 ${cookies.length} 个账号任务均已成功执行，本次不发送通知。`);
     }
 
     console.log(`\n==== ${name} 结束 - ${new Date().toLocaleString('zh-CN')} ====`);
