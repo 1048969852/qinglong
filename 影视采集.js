@@ -1,71 +1,64 @@
-// 此脚本的作用是基于cms10苹果影视站的定时采集功能 结合此脚本进行访问采集链接 从而实现自动采集
-// 建议脚本运行规则设置为 0 */6 * * *  即 每六个小时运行一次 
+// 引入 axios 用于发起网络请求
 const axios = require('axios');
+// 引入青龙面板自带的通知模块
+// 注意：请确保你的脚本在青龙的 scripts 目录下，因为青龙默认会在该目录下提供 sendNotify.js
+const notify = require('./sendNotify'); 
 
-// 目标链接数组
+// 目标链接数组 (请将此处替换为你自己的实际采集链接)
 const urls = [
-  "链接1",
+  "http://你的域名/api.php/provide/vod/?ac=list",
   "链接2",
   "链接3"
 ];
 
-// Telegram Bot 配置
-const TELEGRAM_TOKEN = 'TG TOKEN';
-const TELEGRAM_CHAT_ID = 'TG ID';
-
-// 发送 Telegram 消息的函数
-async function sendTelegramMessage(message) {
-  const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-  try {
-    await axios.post(url, {
-      chat_id: TELEGRAM_CHAT_ID,
-      text: message,
-    });
-    console.log('📩 Telegram 通知发送成功');
-  } catch (error) {
-    console.error('发送 Telegram 消息失败:'， error);
-  }
-}
-
 // 主函数：检查所有链接并统一发送通知
 async function checkUrls() {
-  console.log('🚀 开始链接检查');
-  let resultMessage = '🔍 链接检查结果:\n\n';
-  let hasFailure = false; // 新增标志，用于判断是否有链接失败
+  console.log('🚀 开始触发 CMS 采集链接...');
+  let resultMessage = '🔍 采集触发检查结果:\n\n';
+  let hasFailure = false; // 标志位，用于判断是否有链接失败
 
-  for (const url / urls) {
-    console。log(`➡️ 正在访问: ${url}`);
+  for (const url of urls) { 
+    console.log(`➡️ 正在访问: ${url}`);
     try {
-      const response = await axios.get(url);
+      // 优化1: 增加 15秒 超时限制 (timeout: 15000)，防止目标服务器卡死导致脚本无限期挂起
+      // 优化2: 增加 User-Agent，模拟电脑浏览器请求，降低被拦截的概率
+      const response = await axios.get(url, { 
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+      });
 
       if (response.status === 200) {
-        resultMessage += `✅ 链接成功: ${url}\n`;
-        console。log(`✅ 链接成功: ${url}`);
+        resultMessage += `✅ 成功: ${url}\n`;
+        console.log(`✅ 成功: ${url}`);
       } else {
-        resultMessage += `❌ 链接失败: ${url}, 状态码: ${response.status}\n`;
-        console.error(`❌ 链接失败: ${url}, 状态码: ${response.status}`);
-        hasFailure = true; // 标记有链接失败
+        resultMessage += `❌ 失败: ${url} (状态码: ${response.status})\n`;
+        console.error(`❌ 失败: ${url} (状态码: ${response.status})`);
+        hasFailure = true; 
       }
     } catch (error) {
-      resultMessage += `⚠️ 访问异常: ${url}, 错误: ${error.message}\n`;
-      console.error(`⚠️ 访问异常: ${url}, 错误: ${error.message}`);
-      hasFailure = true; // 标记有链接失败
+      resultMessage += `⚠️ 异常: ${url} (错误: ${error.message})\n`;
+      console.error(`⚠️ 异常: ${url} (错误: ${error.message})`);
+      hasFailure = true; 
     }
 
-    resultMessage += '\n'; // 空行分隔
+    resultMessage += '\n'; // 换行分隔
   }
 
-  console.log('📦 所有链接检查完成...');
+  console.log('📦 所有采集链接触发完成...');
 
-  // 只有当有链接失败时才发送 Telegram 通知
+  // 优化3: 只有当有链接失败时才调用青龙通知
   if (hasFailure) {
-    console.log('⚠️ 检测到链接失败，发送 Telegram 通知...');
-    await sendTelegramMessage(resultMessage);
+    console.log('⚠️ 检测到失败任务，正在调用青龙面板通知...');
+    // 调用青龙自带通知，第一个参数是消息标题，第二个是正文
+    await notify.sendNotify("⚠️ 苹果影视站采集异常", resultMessage);
   } else {
-    console.log('✅ 所有链接均成功，不发送 Telegram 通知。');
+    console.log('✅ 所有采集任务均触发成功，本次无需通知。');
   }
-  console.log('✅ 执行完成');
+  
+  console.log('🎉 脚本执行结束');
 }
 
-// 执行
+// 执行脚本
 checkUrls();
