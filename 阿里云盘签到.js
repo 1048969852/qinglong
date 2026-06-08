@@ -3,87 +3,114 @@
  * @Author: Gemini
  * @Date: 2023-09-15
  * @LastModified: 2025-08-25
- * @Description: 阿里云盘每日签到脚本，适用于青龙面板。功能丰富，支持多账号、随机延迟和详细通知。
+ * @Description: 阿里云盘每日签到脚本，支持自动更新青龙面板的Token环境变量。
  *
  * @Env
  * - ALIYUN_REFRESH_TOKEN: 阿里云盘的 refresh_token，多个账号用换行或 & 分隔。
  *
  * @OptionalEnv
- * - MAX_RANDOM_DELAY: 脚本执行前的最大随机延迟（秒），默认 300。
+ * - MAX_RANDOM_DELAY: 最大随机延迟（秒），默认 300。
  * - RANDOM_SIGNIN: 是否开启随机延迟，默认 true。
  * - PRIVACY_MODE: 是否开启隐私模式（脱敏处理日志和通知），默认 true。
- * - SHOW_TOKEN_IN_NOTIFICATION: 是否在通知中显示新 token 的提示，默认 false。
- *
- * @Usage
- * 1. 在青龙面板 -> 依赖管理 -> NodeJs -> 添加依赖 `got` 和 `crypto-js`。
- * 2. 在环境变量中添加 `ALIYUN_REFRESH_TOKEN`。
- * 3. 添加定时任务，例如: 10 7 * * *
  */
 
-const {
-    sendNotify
-} = require('./sendNotify');
+const { sendNotify } = require('./sendNotify');
 const got = require('got');
 const crypto = require('crypto');
+const fs = require('fs');
 const name = '阿里云盘签到';
 
 // --- 配置项 ---
 const ali_user_agent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 AopApp/1.0 AliApp(AP/10.3.101.1) ALIYUNPAN/4.9.1';
 
 // --- 从环境变量读取配置 ---
-const refreshTokens = process.env.ALIYUN_REFRESH_TOKEN || "";
+const envVarName = 'ALIYUN_REFRESH_TOKEN';
+const refreshTokens = process.env[envVarName] || "";
 const maxRandomDelay = parseInt(process.env.MAX_RANDOM_DELAY, 10) || 300;
 const randomSignIn = (process.env.RANDOM_SIGNIN || "true").toLowerCase() === "true";
 const privacyMode = (process.env.PRIVACY_MODE || "true").toLowerCase() === "true";
-// 建议如果需要知道新Token，在青龙环境变量配置 SHOW_TOKEN_IN_NOTIFICATION="true"
-const showTokenInNotification = (process.env.SHOW_TOKEN_IN_NOTIFICATION || "false").toLowerCase() === "true";
 
-// --- 辅助函数 ---
+// --- 自动更新青龙环境变量的辅助函数 ---
+async function updateQinglongEnv(envName, envValue) {
+    console.log(`\n⚙️ 准备尝试自动更新青龙环境变量: ${envName}...`);
+    try {
+        let authFile = '/ql/data/config/auth.json'; // 适配青龙 2.11+
+        if (!fs.existsSync(authFile)) authFile = '/ql/config/auth.json'; // 适配老版本青龙
+        
+        if (!fs.existsSync(authFile)) {
+            console.log("❌ 找不到青龙 auth.json 配置文件，自动更新失败。");
+            return false;
+        }
 
-/**
- * 脱敏处理敏感数据
- */
-function maskSensitiveData(data, type = "token") {
-    if (!data) return "未知";
-    if (!privacyMode) return data;
+        const authInfo = JSON.parse(fs.readFileSync(authFile, 'utf8'));
+        const token = authInfo.token;
+        if (!token) return false;
 
-    switch (type) {
-        case "token":
-            return data.length <= 10 ? "**********" : `${data.substring(0, 6)}...${data.substring(data.length - 4)}`;
-        case "phone":
-            return data.length >= 7 ? `${data.substring(0, 3)}****${data.substring(data.length - 4)}` : "****";
-        default:
-            return "******";
+        const headers = {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        };
+
+        // 1. 获取当前环境变量的 ID
+        const getUrl = `http://127.0.0.1:5600/api/envs?searchValue=${envName}`;
+        const { body: getBody } = await got.get(getUrl, { headers, responseType: 'json' });
+        const targetEnv = getBody.data.find(e => e.name === envName);
+
+        if (!targetEnv) {
+            console.log(`❌ 找不到名为 ${envName} 的环境变量`);
+            return false;
+        }
+
+        // 2. 提交更新
+        const payload = {
+            name: envName,
+            value: envValue,
+            remarks: targetEnv.remarks || ""
+        };
+        // 兼容新老青龙的ID字段
+        if (targetEnv.id) payload.id = targetEnv.id;
+        if (targetEnv._id) payload._id = targetEnv._id;
+
+        const putUrl = 'http://127.0.0.1:5600/api/envs';
+        const { body: putBody } = await got.put(putUrl, { headers, json: payload, responseType: 'json' });
+
+        if (putBody.code === 200) {
+            console.log("✅ 成功更新青龙面板环境变量！");
+            return true;
+        } else {
+            console.log(`❌ 更新失败: ${putBody.message}`);
+            return false;
+        }
+    } catch (err) {
+        console.error("❌ 自动更新青龙变量时发生异常:", err.message);
+        return false;
     }
 }
 
-/**
- * 生成账号唯一标识
- */
-function generateAccountId(token) {
-    if (!token) return "未知账号";
-    const hash = crypto.createHash('md5').update(token).digest('hex');
-    return `账号${hash.substring(0, 8).toUpperCase()}`;
+// --- 其他辅助函数 ---
+function maskSensitiveData(data, type = "token") {
+    if (!data) return "未知";
+    if (!privacyMode) return data;
+    switch (type) {
+        case "token": return data.length <= 10 ? "**********" : `${data.substring(0, 6)}...${data.substring(data.length - 4)}`;
+        case "phone": return data.length >= 7 ? `${data.substring(0, 3)}****${data.substring(data.length - 4)}` : "****";
+        default: return "******";
+    }
 }
 
-/**
- * 格式化剩余时间
- */
+function generateAccountId(token) {
+    if (!token) return "未知账号";
+    return `账号${crypto.createHash('md5').update(token).digest('hex').substring(0, 8).toUpperCase()}`;
+}
+
 function formatTimeRemaining(seconds) {
     if (seconds <= 0) return "立即执行";
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
-    let result = "";
-    if (hours > 0) result += `${hours}小时`;
-    if (minutes > 0) result += `${minutes}分`;
-    result += `${secs}秒`;
-    return result;
+    return `${hours > 0 ? hours + '小时' : ''}${minutes > 0 ? minutes + '分' : ''}${secs}秒`;
 }
 
-/**
- * 带倒计时的延迟等待
- */
 async function waitWithCountdown(delaySeconds, taskName) {
     if (delaySeconds <= 0) return;
     console.log(`🎲 ${taskName} 需要等待 ${formatTimeRemaining(delaySeconds)}`);
@@ -98,9 +125,6 @@ async function waitWithCountdown(delaySeconds, taskName) {
     }
 }
 
-/**
- * 统一发送通知
- */
 async function notifyUser(title, content) {
     try {
         await sendNotify(title, content);
@@ -110,9 +134,7 @@ async function notifyUser(title, content) {
     }
 }
 
-
 // --- 阿里云盘核心类 ---
-
 class AliYun {
     constructor(refreshToken, index) {
         this.refreshToken = refreshToken;
@@ -122,9 +144,6 @@ class AliYun {
         this.accountId = generateAccountId(refreshToken);
     }
 
-    /**
-     * 带重试机制的网络请求辅助函数
-     */
     async requestWithRetry(url, options, maxRetries = 2) {
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
@@ -137,21 +156,13 @@ class AliYun {
         }
     }
 
-    /**
-     * 更新访问令牌
-     */
     async updateToken() {
         console.log("🔄 正在更新访问令牌...");
         try {
             const { body } = await this.requestWithRetry('https://auth.aliyundrive.com/v2/account/token', {
-                json: {
-                    grant_type: 'refresh_token',
-                    refresh_token: this.refreshToken,
-                },
+                json: { grant_type: 'refresh_token', refresh_token: this.refreshToken },
                 responseType: 'json',
-                headers: {
-                    'User-Agent': ali_user_agent
-                },
+                headers: { 'User-Agent': ali_user_agent },
                 timeout: 10000
             });
 
@@ -169,184 +180,75 @@ class AliYun {
         } catch (error) {
             const errorBody = error.response ? error.response.body : error.message;
             console.error(`❌ Token更新失败: ${JSON.stringify(errorBody)}`);
-            if (JSON.stringify(errorBody).includes("InvalidParameter.RefreshToken")) {
-                this.error = "refresh_token 无效或已过期，请重新获取。";
-            } else {
-                this.error = `Token 更新失败，请检查网络或 refresh_token。`;
-            }
+            this.error = JSON.stringify(errorBody).includes("InvalidParameter.RefreshToken") 
+                ? "refresh_token 无效或已过期，请重新获取。" 
+                : "Token 更新失败，请检查网络或 refresh_token。";
             return false;
         }
     }
 
-    /**
-     * 获取用户信息
-     */
     async getUserInfo() {
-        console.log("👤 正在获取用户信息...");
         try {
             const { body } = await this.requestWithRetry('https://user.aliyundrive.com/v2/user/get', {
-                headers: {
-                    'Authorization': this.accessToken,
-                    'User-Agent': ali_user_agent
-                },
-                json: {}, 
-                responseType: 'json',
-                timeout: 10000
+                headers: { 'Authorization': this.accessToken, 'User-Agent': ali_user_agent },
+                json: {}, responseType: 'json', timeout: 10000
             });
             this.userName = body.nick_name || body.user_name || "未知用户";
-            this.userPhone = body.phone ? maskSensitiveData(body.phone, "phone") : "";
-            console.log(`👤 用户: ${this.userName}`);
         } catch (error) {
-            console.error("⚠️ 获取用户信息失败", error.response ? error.response.body : error.message);
             this.userName = "未知用户";
-            this.userPhone = "";
         }
     }
 
-    /**
-     * 获取存储空间信息
-     */
-    async getStorageInfo() {
-        console.log("💾 正在获取存储空间信息...");
-        try {
-            const { body } = await this.requestWithRetry('https://api.aliyundrive.com/v2/user/get', {
-                headers: {
-                    'Authorization': this.accessToken,
-                    'User-Agent': ali_user_agent
-                },
-                json: {}, 
-                responseType: 'json',
-                timeout: 10000
-            });
-            const { used_size, total_size } = body.personal_space_info || {};
-            this.usedGb = used_size ? (used_size / Math.pow(1024, 3)).toFixed(2) : 0;
-            this.totalGb = total_size ? (total_size / Math.pow(1024, 3)).toFixed(2) : 0;
-            console.log(`💾 存储空间: ${this.usedGb}GB / ${this.totalGb}GB`);
-        } catch (error) {
-            console.error("⚠️ 获取存储信息失败", error.response ? error.response.body : error.message);
-            this.usedGb = 0;
-            this.totalGb = 0;
-        }
-    }
-
-    /**
-     * 执行签到
-     */
     async signIn() {
         console.log("📝 正在执行签到...");
         try {
             const { body } = await this.requestWithRetry('https://member.aliyundrive.com/v1/activity/sign_in_list', {
-                headers: {
-                    'Authorization': this.accessToken,
-                    'User-Agent': ali_user_agent
-                },
-                json: {},
-                responseType: 'json',
-                timeout: 10000
+                headers: { 'Authorization': this.accessToken, 'User-Agent': ali_user_agent },
+                json: {}, responseType: 'json', timeout: 10000
             });
 
-            if (!body.success) {
-                throw new Error(body.message || "签到失败");
-            }
+            if (!body.success) throw new Error(body.message || "签到失败");
 
             const signInCount = body.result.signInCount;
-            const signInLogs = body.result.signInLogs;
-            const todayLog = signInLogs[signInCount - 1];
-
+            const todayLog = body.result.signInLogs[signInCount - 1];
             this.signInMsg = `签到成功，累计 ${signInCount} 天`;
             this.rewardInfo = "今天奖励是空的~";
 
-            if (todayLog && todayLog.status === 'normal' && todayLog.isReward) {
-                const reward = todayLog.reward;
-                if (reward) {
-                    this.rewardInfo = `${reward.name} - ${reward.description}`;
-                }
+            if (todayLog && todayLog.status === 'normal' && todayLog.isReward && todayLog.reward) {
+                this.rewardInfo = `${todayLog.reward.name} - ${todayLog.reward.description}`;
             }
-            console.log(`✅ ${this.signInMsg}`);
-            console.log(`🎁 今日奖励: ${this.rewardInfo}`);
+            console.log(`✅ ${this.signInMsg} | 🎁 奖励: ${this.rewardInfo}`);
             return true;
-
         } catch (error) {
             const errorBody = error.response ? error.response.body : error.message;
-            console.error(`❌ 签到失败: ${JSON.stringify(errorBody)}`);
             if (typeof errorBody === 'object' && errorBody.code === 'SignInRepeated') {
                 this.signInMsg = "今天已经签到过了";
                 this.rewardInfo = "无需重复操作";
-                return true; // 已经签到也算成功，不需要报警
+                return true; 
             }
             this.signInMsg = "签到失败";
-            this.rewardInfo = errorBody.message || "请检查脚本或网络";
+            this.error = errorBody.message || "未知错误";
             return false;
         }
     }
 
-    /**
-     * 主执行函数
-     */
     async main() {
         console.log(`\n--- 账号 ${this.index} (${this.accountId}) 开始 ---`);
-
-        if (!await this.updateToken()) {
-            return {
-                success: false,
-                message: this.buildNotificationMessage(false),
-                hasNewToken: false
-            };
-        }
-
+        if (!await this.updateToken()) return { success: false, hasNewToken: false };
         await this.getUserInfo();
-        await this.getStorageInfo();
         const signInSuccess = await this.signIn();
-
-        return {
-            success: signInSuccess,
-            message: this.buildNotificationMessage(signInSuccess),
-            hasNewToken: !!this.newRefreshToken
-        };
-    }
-
-    /**
-     * 构建通知消息（仅组装文本内容）
-     */
-    buildNotificationMessage(isSuccess) {
-        let msg = ``;
-        if (isSuccess) {
-            msg += `📝 签到: ${this.signInMsg}\n`;
-            msg += `🎁 奖励: ${this.rewardInfo}\n`;
-        } else {
-            msg += `📄 原因: ${this.error || this.signInMsg}\n`;
-            if (this.error) {
-                msg += `🔧 请检查环境变量 ALIYUN_REFRESH_TOKEN 是否正确或已过期。\n`;
-            }
-        }
-
-        // 强提醒新 Token
-        if (this.newRefreshToken) {
-            msg += `🔄 检测到新 Token! 旧Token即将失效，请尽快去青龙修改环境变量。`;
-            if (showTokenInNotification && !privacyMode) {
-                msg += `\n[新Token内容]: ${this.newRefreshToken}`;
-            } else if (!showTokenInNotification && !privacyMode) {
-                msg += `\n(可设置 SHOW_TOKEN_IN_NOTIFICATION="true" 在通知中直接显示Token)`;
-            }
-        }
-
-        return msg;
+        return { success: signInSuccess, hasNewToken: !!this.newRefreshToken };
     }
 }
-
 
 /**
  * 主程序入口
  */
 (async () => {
     console.log(`==== ${name} 开始 - ${new Date().toLocaleString('zh-CN')} ====`);
-    console.log(`🎲 随机延迟: ${randomSignIn ? '已启用' : '已禁用'}`);
-    console.log(`🔒 隐私模式: ${privacyMode ? '已启用' : '已禁用'}`);
 
     if (!refreshTokens) {
-        const errorMsg = "❌ 未找到 ALIYUN_REFRESH_TOKEN 环境变量，请配置后再运行！";
-        console.log(errorMsg);
-        await notifyUser(name, errorMsg);
+        await notifyUser(name, "❌ 未找到 ALIYUN_REFRESH_TOKEN 环境变量，请配置后再运行！");
         return;
     }
 
@@ -355,42 +257,74 @@ class AliYun {
         await waitWithCountdown(delay, name);
     }
 
-    const tokens = refreshTokens.includes('\n') ?
-        refreshTokens.split('\n').filter(t => t.trim()) :
-        refreshTokens.split('&').filter(t => t.trim());
-
+    const tokens = refreshTokens.includes('\n') ? refreshTokens.split('\n').filter(t => t.trim()) : refreshTokens.split('&').filter(t => t.trim());
     console.log(`📝 共发现 ${tokens.length} 个账号`);
     
     let allNoticeMessages = "";
     let shouldNotify = false;
+    let hasEnvUpdate = false;
+    let currentEnvString = refreshTokens; // 用于存储最新的环境变量全量字符串
 
     for (let i = 0; i < tokens.length; i++) {
         const aliyun = new AliYun(tokens[i], i + 1);
         const result = await aliyun.main();
 
-        // 核心修改：如果签到失败，或者签到成功但检测到Token已刷新，才会被加入通知列表
+        // 核心自动更新逻辑
+        if (result.hasNewToken) {
+            // 将旧的 token 替换为新的 token
+            currentEnvString = currentEnvString.replace(tokens[i], aliyun.newRefreshToken);
+            hasEnvUpdate = true;
+        }
+
+        // 记录日志，但不一定会发送通知
         if (!result.success || result.hasNewToken) {
-            shouldNotify = true;
+            
+            // ⭐️ 核心修改：只有遇到真正的失败，才会触发发通知的开关
+            if (!result.success) {
+                shouldNotify = true; 
+            }
+            
             const icon = result.success ? "⚠️" : "❌";
-            allNoticeMessages += `\n${icon} 账号 ${i + 1} (${aliyun.userName || aliyun.accountId}):\n${result.message}\n`;
+            let accMsg = `\n${icon} 账号 ${i + 1} (${aliyun.userName || aliyun.accountId}):\n`;
+            
+            if (result.success) {
+                accMsg += `📝 签到: ${aliyun.signInMsg}\n🎁 奖励: ${aliyun.rewardInfo}\n`;
+            } else {
+                accMsg += `📄 失败原因: ${aliyun.error || aliyun.signInMsg}\n`;
+            }
+
+            if (result.hasNewToken) {
+                accMsg += `🔄 已获取到新 Token！脚本尝试自动为您更新青龙环境变量。\n`;
+            }
+            allNoticeMessages += accMsg;
         } else {
-             console.log(`✅ 账号 ${i + 1} (${aliyun.userName || aliyun.accountId}) 签到成功，无异常无需通知。`);
+             console.log(`✅ 账号 ${i + 1} (${aliyun.userName || aliyun.accountId}) 签到成功且Token无变化。`);
         }
 
         if (i < tokens.length - 1) {
-            const delay = Math.floor(Math.random() * 5) + 5; 
-            console.log(`\n⏱️  随机等待 ${delay} 秒后处理下一个账号...`);
-            await new Promise(resolve => setTimeout(resolve, delay * 1000));
+            await new Promise(resolve => setTimeout(resolve, (Math.floor(Math.random() * 5) + 5) * 1000));
         }
     }
 
-    // --- 最终判定：只有异常或Token更新才发送通知 ---
+    // --- 执行环境变量自动更新 ---
+    if (hasEnvUpdate) {
+        const isUpdateSuccess = await updateQinglongEnv(envVarName, currentEnvString);
+        if (isUpdateSuccess) {
+            allNoticeMessages += `\n✅ 报告: 青龙面板的 [${envVarName}] 环境变量已自动更新为最新 Token！您无需手动操作。`;
+            console.log(`✅ 青龙环境变量自动更新成功，无异常无需通知。`);
+        } else {
+            allNoticeMessages += `\n❌ 报告: 自动更新青龙变量失败，请手动去面板修改以防失效。`;
+            // ⭐️ 核心修改：如果自动更新失败，也算作严重的异常，必须通知提醒！
+            shouldNotify = true; 
+        }
+    }
+
+    // --- 最终通知判定 ---
     if (shouldNotify) {
-        console.log(`\n⚠️ 检测到异常任务或新Token，准备发送通知...`);
-        const title = `⚠️ 阿里云盘签到通知`;
-        await notifyUser(title, allNoticeMessages);
+        console.log(`\n⚠️ 准备发送异常通知...`);
+        await notifyUser(`⚠️ 阿里云盘签到异常`, allNoticeMessages);
     } else {
-        console.log(`\n🎉 所有 ${tokens.length} 个账号均已静默签到成功，且Token无变化，本次不发送通知。`);
+        console.log(`\n🎉 所有账号均签到成功（包含已处理的新Token），本次静默不通知。`);
     }
 
     console.log(`\n==== ${name} 结束 - ${new Date().toLocaleString('zh-CN')} ====`);
